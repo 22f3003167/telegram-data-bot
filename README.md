@@ -56,12 +56,35 @@ cp .env.example .env   # fill in the real values
   background thread so Telegram does not retry mid-run.
 - `GET /healthz` — 200 OK, for uptime pings and Render health checks.
 
-## Deploy (Render)
+## Deploy
 
-Start command: `gunicorn main:app`. Set `TELEGRAM_BOT_TOKEN`,
-`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `GCS_BUCKET_NAME` and the log-storage
-credential in the dashboard. Then register the webhook:
+Environment variables, either host: `TELEGRAM_BOT_TOKEN`, `LLM_API_KEY`,
+`LLM_BASE_URL`, `LLM_MODEL`, `LOG_BACKEND=github`, `GITHUB_TOKEN`, `GITHUB_REPO`.
+
+**Vercel** — `vercel.json` and `api/index.py` are committed; import the repo and
+add the env vars. `maxDuration` is set to 60s, the Hobby ceiling.
+
+**Render** — start command `gunicorn main:app`.
+
+Then register the webhook:
 
 ```bash
-curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d "url=https://<app>.onrender.com/webhook"
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d "url=https://<host>/webhook"
 ```
+
+### Vercel caveats
+
+The app detects `VERCEL` and processes the question inline, because a serverless
+instance is frozen once its response returns and a background thread would be
+killed mid-run. Two consequences:
+
+- **60s ceiling.** Measured runs: ~6-7s for a straightforward CSV question, but
+  **39.7s** for one needing search plus multiple fetches, and that same question
+  has also exhausted its step budget. Slow questions can exceed the limit, and
+  the run is then lost entirely.
+- **History is per-instance.** `HISTORY` is an in-memory dict. Serverless gives
+  no guarantee that consecutive turns hit the same instance, so multi-turn
+  context can be silently lost. A long-lived host keeps one process and does not
+  have this problem.
+
+Neither applies on Render's free tier, which runs a single persistent instance.

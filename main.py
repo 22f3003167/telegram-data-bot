@@ -22,6 +22,9 @@ MAX_HISTORY = 20
 # This is not configurable on purpose - emitting any other shape fails grading.
 REPLY_KEYS = ("answer", "log_url")
 
+# Vercel/Lambda-style hosts cannot run work after the response is returned.
+SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
 app = Flask(__name__)
 
 # chat_id -> [{"role": ..., "content": ...}]. Fine for a single free-tier instance.
@@ -90,8 +93,15 @@ def webhook():
     text = message.get("text")
 
     if chat_id and text:
-        # Answer 200 immediately so Telegram does not retry while we analyse.
-        threading.Thread(target=handle, args=(chat_id, text), daemon=True).start()
+        if SERVERLESS:
+            # Serverless freezes the instance once the response returns, so a
+            # background thread would be killed mid-analysis. Run inline and
+            # hope the work fits inside the platform's function timeout.
+            handle(chat_id, text)
+        else:
+            # Long-lived host: answer 200 at once so Telegram does not retry
+            # while we analyse.
+            threading.Thread(target=handle, args=(chat_id, text), daemon=True).start()
 
     return jsonify(ok=True)
 
