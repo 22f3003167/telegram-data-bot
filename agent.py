@@ -71,6 +71,13 @@ RULES:
    - If it is a list, output a JSON array, e.g. [1, 2, 3]
    - If it is an object, output a JSON object with exactly the requested keys.
    Do not wrap it in {"answer": ...} — the calling code does that.
+5. Types matter, because answers are compared by exact match:
+   - Numbers must be JSON numbers, never strings: 87.0 and 167, not "87.0" or
+     "167". This applies to values inside objects and arrays too. Note that
+     values coming back from an API are often strings - convert them.
+   - Do not add thousands separators, currency symbols, units or percent signs
+     to a numeric answer.
+   - Only use a string when the answer really is text, such as a state name.
 """
 
 TOOLS = [
