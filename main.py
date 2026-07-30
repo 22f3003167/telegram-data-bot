@@ -17,10 +17,10 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 MAX_HISTORY = 20
 
-# "envelope" -> {"answer": <value>, "log_url": "..."}   (project spec)
-# "bare"     -> <value> alone, for graders that exact-match the whole reply
-#               against the requested shape (see grade.py in the eval repo).
-REPLY_FORMAT = os.environ.get("REPLY_FORMAT", "envelope").strip().lower()
+# The grader requires EXACTLY this object and nothing else:
+#   {"answer": <shaped as the question asks>, "log_url": "https://.../run.jsonl"}
+# This is not configurable on purpose - emitting any other shape fails grading.
+REPLY_KEYS = ("answer", "log_url")
 
 app = Flask(__name__)
 
@@ -61,11 +61,12 @@ def handle(chat_id, text):
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
-    if REPLY_FORMAT == "bare":
-        body = answer
-    else:
-        body = {"answer": answer, "log_url": log_url}
-    payload = json.dumps(body, ensure_ascii=False)
+    # default=str so an exotic value can never make the reply unserialisable,
+    # which would leave the grader with no JSON object at all.
+    payload = json.dumps(
+        {"answer": answer, "log_url": log_url}, ensure_ascii=False, default=str
+    )
+    assert set(json.loads(payload)) == set(REPLY_KEYS), "reply must be exactly the envelope"
 
     with LOCK:
         HISTORY.setdefault(chat_id, []).append({"role": "assistant", "content": payload})

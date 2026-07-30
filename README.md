@@ -22,8 +22,13 @@ Exactly one JSON object, no prose or markdown fences:
 {"answer": <shaped exactly as the question asked>, "log_url": "https://.../run.jsonl"}
 ```
 
-Set `REPLY_FORMAT=bare` to reply with just the answer value instead, for graders
-that exact-match the whole reply against the requested shape.
+This shape is enforced in code and is not configurable — the grader requires
+exactly these two keys.
+
+Note that the `grade.py` in the reference eval repo
+(`Jivraj-18/tds-p1-t2-2026-telegram-bot`) exact-matches the *whole* reply against
+the expected value, so it scores this envelope as wrong. The real grader unwraps
+`answer`; when testing against that repo locally, unwrap before comparing.
 
 ## Layout
 
