@@ -1,8 +1,18 @@
 # Telegram data-analyst bot
 
-Answers one data-analysis question per Telegram message. An LLM agent (via
-OpenRouter) drives two tools — `fetch_url` and a sandboxed `run_python` — and
-every step of the run is written to a public JSONL log.
+Answers one data-analysis question per Telegram message. An LLM agent drives two
+tools — `fetch_url` and a sandboxed `run_python` — and every step of the run is
+written to a public JSONL log.
+
+## LLM endpoint
+
+Any OpenAI-compatible endpoint, set via `LLM_BASE_URL` / `LLM_API_KEY` /
+`LLM_MODEL`. Default is AI Pipe's **`https://aipipe.org/openai/v1`**.
+
+Note that AI Pipe's other two routes are currently unusable: `/openrouter/v1`
+returns `402 Insufficient credits` (AI Pipe's own upstream OpenRouter balance,
+not the caller's), and `/geminiv1beta` rejects every current model with
+`"pricing unknown"`. Use the `/openai/v1` route.
 
 ## Reply contract
 

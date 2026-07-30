@@ -37,10 +37,10 @@ class RunLogger:
         fd, self.path = tempfile.mkstemp(prefix=f"run-{self.run_id}-", suffix=".jsonl")
         os.close(fd)
 
-    def log(self, step, **content):
+    def log(self, step_type, **content):
         """Append one structured line: step type, timestamp, content."""
         record = {
-            "step": step,
+            "step": step_type,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "run_id": self.run_id,
             "chat_id": self.chat_id,

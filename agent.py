@@ -14,8 +14,8 @@ from openai import OpenAI
 
 from run_logger import RunLogger
 
-MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
-BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://aipipe.org/openrouter/v1")
+MODEL = os.environ.get("LLM_MODEL", "gpt-4.1-mini")
+BASE_URL = os.environ.get("LLM_BASE_URL", "https://aipipe.org/openai/v1")
 MAX_STEPS = 14
 PYTHON_TIMEOUT = 30
 PREVIEW_CHARS = 12000
@@ -188,7 +188,7 @@ def _parse_answer(text):
 def _client():
     return OpenAI(
         base_url=BASE_URL,
-        api_key=os.environ["OPENROUTER_API_KEY"],
+        api_key=os.environ["LLM_API_KEY"],
         default_headers={"X-Title": "tds-telegram-data-bot"},
     )
 
@@ -212,13 +212,13 @@ def answer_question(history, chat_id):
     answer = None
 
     for step in range(MAX_STEPS):
-        logger.log("model_request", step=step, message_count=len(messages))
+        logger.log("model_request", iteration=step, message_count=len(messages))
         try:
             resp = client.chat.completions.create(
                 model=MODEL, messages=messages, tools=TOOLS, temperature=0
             )
         except Exception as exc:  # noqa: BLE001
-            logger.log("model_error", step=step, error=str(exc))
+            logger.log("model_error", iteration=step, error=str(exc))
             answer = f"[error contacting model: {exc}]"
             break
 
@@ -226,7 +226,7 @@ def answer_question(history, chat_id):
         tool_calls = msg.tool_calls or []
         logger.log(
             "model_response",
-            step=step,
+            iteration=step,
             content=msg.content,
             tool_calls=[
                 {"name": tc.function.name, "arguments": tc.function.arguments}
@@ -263,7 +263,7 @@ def answer_question(history, chat_id):
                 args = json.loads(tc.function.arguments or "{}")
             except ValueError:
                 args = {}
-            logger.log("tool_call", step=step, tool=name, arguments=args)
+            logger.log("tool_call", iteration=step, tool=name, arguments=args)
             try:
                 if name == "fetch_url":
                     result = fetch_url(args.get("url", ""), workdir)
@@ -273,7 +273,7 @@ def answer_question(history, chat_id):
                     result = f"[ERROR] Unknown tool: {name}"
             except Exception as exc:  # noqa: BLE001
                 result = f"[ERROR] {type(exc).__name__}: {exc}"
-            logger.log("tool_result", step=step, tool=name, result=result)
+            logger.log("tool_result", iteration=step, tool=name, result=result)
             messages.append(
                 {"role": "tool", "tool_call_id": tc.id, "content": result}
             )
