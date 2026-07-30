@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+venv/
+.venv/
+logs/
+*.jsonl
+.DS_Store
+.bucket_name

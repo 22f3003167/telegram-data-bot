@@ -1,0 +1,11 @@
+flask
+gunicorn
+openai
+requests
+pandas
+numpy
+openpyxl
+lxml
+beautifulsoup4
+python-dotenv
+google-cloud-storage
