@@ -61,6 +61,10 @@ cp .env.example .env   # fill in the real values
 Environment variables, either host: `TELEGRAM_BOT_TOKEN`, `LLM_API_KEY`,
 `LLM_BASE_URL`, `LLM_MODEL`, `LOG_BACKEND=github`, `GITHUB_TOKEN`, `GITHUB_REPO`.
 
+`GITHUB_REPO` must point at a **separate** public repo from this one
+(`22f3003167/telegram-data-bot-logs`). Every run commits a log file, so pointing
+it at the code repo would make each answer trigger a fresh deployment.
+
 **Vercel** — `vercel.json` and `api/index.py` are committed; import the repo and
 add the env vars. `maxDuration` is set to 60s, the Hobby ceiling.
 
