@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import urllib.parse
 
@@ -48,6 +49,10 @@ RULES:
    then mospi_get_metadata for valid filter values, then mospi_get_data.
    mospi_get_data returns every state when you omit a state filter, so read the
    whole list out of that one response - never query states one at a time.
+1e. Tool results that are too long to show in full are saved as files in the
+   working directory, and the tool tells you the filename. Load those files in
+   run_python (json.load(open('name.json'))) rather than retyping the data into
+   your code - retyping is slow, error-prone, and only sees the truncated part.
 1c. NEVER answer with a placeholder such as "unknown", "not found", "N/A" or
    "data unavailable". The question always has a real answer. If retrieval
    failed, give your single best real-world answer in the requested shape --
@@ -253,11 +258,51 @@ def fetch_url(url, workdir):
     return _truncate(header + resp.text)
 
 
+def _compiles(src):
+    try:
+        compile(src, "<snippet>", "exec")
+        return True
+    except SyntaxError:
+        return False
+
+
+def _repair_indentation(code):
+    """Models sometimes emit a stray leading space on a top-level statement.
+
+    Try cheap rewrites, accepting one only if it actually parses - so code with
+    real indentation (loops, defs) is never silently mangled.
+    """
+    if _compiles(code):
+        return code
+    for candidate in (
+        textwrap.dedent(code),
+        "\n".join(line.lstrip() for line in code.splitlines()),
+    ):
+        if _compiles(candidate):
+            return candidate
+    return code
+
+
+def _save_tool_output(workdir, tool, text):
+    """Persist a tool result so run_python can load it instead of retyping it."""
+    name = f"{tool}_{len(os.listdir(workdir)) + 1}.json"
+    try:
+        with open(os.path.join(workdir, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        return text
+    return (
+        f"[full result saved to {name} in the working directory - load it in "
+        f"run_python (e.g. json.load(open('{name}'))) instead of retyping the "
+        f"data]\n{_truncate(text)}"
+    )
+
+
 def run_python(code, workdir):
     """Run code in a subprocess. Never raises; returns stdout/stderr as text."""
     script = os.path.join(workdir, "_snippet.py")
     with open(script, "w", encoding="utf-8") as fh:
-        fh.write(PREAMBLE + "\n" + code)
+        fh.write(PREAMBLE + "\n" + _repair_indentation(code))
     try:
         proc = subprocess.run(
             [sys.executable, script],
@@ -337,7 +382,9 @@ def mospi_call(name, args):
         return f"[MCP error] {payload['error']}"
     content = payload.get("result", {}).get("content", [])
     text = "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
-    return _truncate(text or json.dumps(payload.get("result", {})))
+    # Full text on purpose - the caller saves it to disk and truncates only the
+    # copy shown to the model.
+    return text or json.dumps(payload.get("result", {}))
 
 
 def _parse_answer(text):
@@ -435,7 +482,7 @@ def answer_question(history, chat_id):
             logger.log("tool_call", iteration=step, tool=name, arguments=args)
             try:
                 if name.startswith(MCP_PREFIX):
-                    result = mospi_call(name, args)
+                    result = _save_tool_output(workdir, name, mospi_call(name, args))
                 elif name == "web_search":
                     result = web_search(args.get("query", ""))
                 elif name == "fetch_url":
