@@ -14,7 +14,8 @@ from openai import OpenAI
 
 from run_logger import RunLogger
 
-MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5")
+MODEL = os.environ.get("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
+BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://aipipe.org/openrouter/v1")
 MAX_STEPS = 14
 PYTHON_TIMEOUT = 30
 PREVIEW_CHARS = 12000
@@ -186,7 +187,7 @@ def _parse_answer(text):
 
 def _client():
     return OpenAI(
-        base_url="https://openrouter.ai/api/v1",
+        base_url=BASE_URL,
         api_key=os.environ["OPENROUTER_API_KEY"],
         default_headers={"X-Title": "tds-telegram-data-bot"},
     )

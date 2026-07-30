@@ -1,25 +1,30 @@
-"""Structured JSONL run logging with upload to a public GCS bucket."""
+"""Structured JSONL run logging, uploaded to a public URL.
 
+Two backends, chosen with LOG_BACKEND:
+  "github" (default) -- commits to a public repo, served via raw.githubusercontent.com.
+                        Permanent URLs. Needs GITHUB_TOKEN + GITHUB_REPO.
+  "gcs"              -- uploads to a public GCS bucket. Needs credentials that the
+                        host can actually obtain (blocked on projects that enforce
+                        constraints/iam.disableServiceAccountKeyCreation).
+"""
+
+import base64
 import datetime
 import json
 import os
 import tempfile
 import uuid
 
-from google.cloud import storage
-from google.oauth2 import service_account
+import requests
+
+BACKEND = os.environ.get("LOG_BACKEND", "github").strip().lower()
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "")  # "owner/repo"
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+GITHUB_LOG_DIR = os.environ.get("GITHUB_LOG_DIR", "logs")
 
 BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME", "")
-
-
-def _client():
-    """GCS client. Uses inline service-account JSON on Render, ADC locally."""
-    raw = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
-    if raw:
-        info = json.loads(raw)
-        creds = service_account.Credentials.from_service_account_info(info)
-        return storage.Client(project=info.get("project_id"), credentials=creds)
-    return storage.Client()
 
 
 class RunLogger:
@@ -46,7 +51,48 @@ class RunLogger:
 
     def upload(self):
         """Upload the log and return its public HTTPS URL."""
-        bucket = _client().bucket(BUCKET_NAME)
-        blob = bucket.blob(self.object_name)
+        if BACKEND == "gcs":
+            return self._upload_gcs()
+        return self._upload_github()
+
+    def _upload_github(self):
+        if not (GITHUB_TOKEN and GITHUB_REPO):
+            raise RuntimeError("LOG_BACKEND=github needs GITHUB_TOKEN and GITHUB_REPO")
+        with open(self.path, "rb") as fh:
+            payload = base64.b64encode(fh.read()).decode("ascii")
+
+        target = f"{GITHUB_LOG_DIR}/{self.object_name}"
+        resp = requests.put(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{target}",
+            headers={
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github+json",
+            },
+            json={
+                "message": f"log: run {self.run_id} (chat {self.chat_id})",
+                "content": payload,
+                "branch": GITHUB_BRANCH,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return (
+            f"https://raw.githubusercontent.com/{GITHUB_REPO}/"
+            f"{GITHUB_BRANCH}/{target}"
+        )
+
+    def _upload_gcs(self):
+        from google.cloud import storage
+        from google.oauth2 import service_account
+
+        raw = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+        if raw:
+            info = json.loads(raw)
+            creds = service_account.Credentials.from_service_account_info(info)
+            client = storage.Client(project=info.get("project_id"), credentials=creds)
+        else:
+            client = storage.Client()
+
+        blob = client.bucket(BUCKET_NAME).blob(self.object_name)
         blob.upload_from_filename(self.path, content_type="application/x-ndjson")
         return f"https://storage.googleapis.com/{BUCKET_NAME}/{self.object_name}"
