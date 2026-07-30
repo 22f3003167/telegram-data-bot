@@ -1,94 +1,105 @@
 # Telegram data-analyst bot
 
-Answers one data-analysis question per Telegram message. An LLM agent drives two
-tools — `fetch_url` and a sandboxed `run_python` — and every step of the run is
-written to a public JSONL log.
-
-## LLM endpoint
-
-Any OpenAI-compatible endpoint, set via `LLM_BASE_URL` / `LLM_API_KEY` /
-`LLM_MODEL`. Default is AI Pipe's **`https://aipipe.org/openai/v1`**.
-
-Note that AI Pipe's other two routes are currently unusable: `/openrouter/v1`
-returns `402 Insufficient credits` (AI Pipe's own upstream OpenRouter balance,
-not the caller's), and `/geminiv1beta` rejects every current model with
-`"pricing unknown"`. Use the `/openai/v1` route.
+Answers one data-analysis question per Telegram message. An LLM agent drives
+three tools — `web_search`, `fetch_url` and a sandboxed `run_python` — and every
+step of the run is written to a public JSONL log.
 
 ## Reply contract
 
-Exactly one JSON object, no prose or markdown fences:
+Every reply is exactly one JSON object, no prose and no markdown fences:
 
 ```json
 {"answer": <shaped exactly as the question asked>, "log_url": "https://.../run.jsonl"}
 ```
 
-This shape is enforced in code and is not configurable — the grader requires
-exactly these two keys.
+The shape is enforced in code (`main.py`) and is not configurable. `answer` is
+whatever the question asked for — a number, string, array, or object with
+specific keys — parsed from the question text itself, not a fixed schema.
 
-Note that the `grade.py` in the reference eval repo
-(`Jivraj-18/tds-p1-t2-2026-telegram-bot`) exact-matches the *whole* reply against
-the expected value, so it scores this envelope as wrong. The real grader unwraps
-`answer`; when testing against that repo locally, unwrap before comparing.
+## What it handles
+
+- **Inline data** — figures embedded in the message, computed with pandas rather
+  than mental arithmetic.
+- **Public datasets** — a URL in the message, or one found with `web_search`,
+  fetched and analysed. CSV and XLSX are parsed on arrival; the raw file is kept
+  in the run's working directory so `run_python` can load it in full.
+- **Multi-turn** — history is tracked per `chat_id`. The last message is the
+  question; earlier turns are context (e.g. which dataset is under discussion).
+
+## Running it
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env      # then fill in the values
+.venv/bin/python poll.py
+```
+
+`poll.py` long-polls Telegram's `getUpdates`, so the bot runs from a laptop with
+**no public URL, no webhook and no hosting**. It answers messages using exactly
+the same handler as the webhook, so behaviour is identical.
+
+`main.py` is the same bot as a Flask webhook app (`POST /webhook`,
+`GET /healthz`) for when a public URL is available. Use one or the other —
+Telegram does not allow a webhook and `getUpdates` at the same time, so `poll.py`
+clears any registered webhook on startup.
 
 ## Layout
 
 | File | Purpose |
 | --- | --- |
-| `main.py` | Flask webhook, per-`chat_id` history, Telegram `sendMessage` |
 | `agent.py` | Tool definitions, system prompt, tool-calling loop |
 | `run_logger.py` | JSONL run log + upload, returns the public URL |
+| `poll.py` | Long-polling runner — no hosting required |
+| `main.py` | Flask webhook app, history, reply-shape enforcement |
+| `test_agent.py` | Three quick end-to-end checks |
+| `run_evals.py` | Scores the bot with the course grading pipeline |
 
 `logging.py` would shadow the stdlib `logging` module, so the logger lives in
 `run_logger.py`.
 
-## Local run
+## Logs
 
-```bash
-uv venv --python 3.13 .venv
-uv pip install --python .venv -r requirements.txt
-cp .env.example .env   # fill in the real values
-.venv/bin/python main.py
+Each run writes one JSON object per line — `run_start`, `user_question`,
+`model_request`, `model_response`, `tool_call`, `tool_result`, `final_answer` —
+and is committed to a public repo, giving a permanent wget-able URL:
+
+```
+https://raw.githubusercontent.com/<GITHUB_REPO>/main/logs/<chat_id>-<run_id>.jsonl
 ```
 
-## Endpoints
+`GITHUB_REPO` must be a **separate** repo from this one; every run commits a
+file, so pointing it here would add a commit per answer.
 
-- `POST /webhook` — Telegram updates. Returns 200 immediately and analyses in a
-  background thread so Telegram does not retry mid-run.
-- `GET /healthz` — 200 OK, for uptime pings and Render health checks.
-
-## Deploy
-
-Environment variables, either host: `TELEGRAM_BOT_TOKEN`, `LLM_API_KEY`,
-`LLM_BASE_URL`, `LLM_MODEL`, `LOG_BACKEND=github`, `GITHUB_TOKEN`, `GITHUB_REPO`.
-
-`GITHUB_REPO` must point at a **separate** public repo from this one
-(`22f3003167/telegram-data-bot-logs`). Every run commits a log file, so pointing
-it at the code repo would make each answer trigger a fresh deployment.
-
-**Vercel** — `vercel.json` and `api/index.py` are committed; import the repo and
-add the env vars. `maxDuration` is set to 60s, the Hobby ceiling.
-
-**Render** — start command `gunicorn main:app`.
-
-Then register the webhook:
+## Testing
 
 ```bash
-curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d "url=https://<host>/webhook"
+.venv/bin/python test_agent.py
+
+git clone https://github.com/Jivraj-18/tds-p1-t2-2026-telegram-bot ../pipeline
+.venv/bin/python run_evals.py --pipeline ../pipeline
 ```
 
-### Vercel caveats
+`run_evals.py` substitutes for the pipeline's `collect.py` — the only stage that
+touches Telegram, and the one needing a logged-in user account — by calling the
+agent directly. Questions are rendered with the same `Template.substitute` logic
+and results written in `collect.py`'s format, so the pipeline's own `grade.py`
+scores them unmodified.
 
-The app detects `VERCEL` and processes the question inline, because a serverless
-instance is frozen once its response returns and a background thread would be
-killed mid-run. Two consequences:
+## LLM endpoint
 
-- **60s ceiling.** Measured runs: ~6-7s for a straightforward CSV question, but
-  **39.7s** for one needing search plus multiple fetches, and that same question
-  has also exhausted its step budget. Slow questions can exceed the limit, and
-  the run is then lost entirely.
-- **History is per-instance.** `HISTORY` is an in-memory dict. Serverless gives
-  no guarantee that consecutive turns hit the same instance, so multi-turn
-  context can be silently lost. A long-lived host keeps one process and does not
-  have this problem.
+Any OpenAI-compatible endpoint, via `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`.
+Default is AI Pipe's `https://aipipe.org/openai/v1`.
 
-Neither applies on Render's free tier, which runs a single persistent instance.
+AI Pipe's other two routes are currently unusable: `/openrouter/v1` returns
+`402 Insufficient credits` (AI Pipe's own upstream balance, not the caller's),
+and `/geminiv1beta` rejects every current model with `"pricing unknown"`.
+
+## Known limitations
+
+- **JS-rendered sources.** `mospi.gov.in` returns a ~2.6 KB shell with no data;
+  plain HTTP cannot read it. Such questions fall back to model knowledge.
+- **Search throttling.** DuckDuckGo rate-limits bursts. `web_search` retries
+  across two endpoints and then says so explicitly, so the model stops retrying
+  and works from a landing page or its own knowledge instead.
+- **History is in-process.** Fine for one long-running instance; it does not
+  survive a restart or spread across replicas.
