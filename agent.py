@@ -372,8 +372,10 @@ def mospi_tools():
     return _MCP_CACHE["tools"]
 
 
-def mospi_call(name, args):
-    """Invoke one MCP tool and return its text content."""
+MAX_MCP_PAGES = 25
+
+
+def _mcp_once(name, args):
     payload = _mcp_rpc(
         "tools/call",
         {"name": name[len(MCP_PREFIX):], "arguments": args or {}},
@@ -382,9 +384,54 @@ def mospi_call(name, args):
         return f"[MCP error] {payload['error']}"
     content = payload.get("result", {}).get("content", [])
     text = "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
+    return text or json.dumps(payload.get("result", {}))
+
+
+def mospi_call(name, args):
+    """Invoke one MCP tool, following pagination to completion.
+
+    get_data returns 10 rows per page. Handing the model only page 1 makes any
+    max/min/sum over the result silently wrong, so every page is fetched and
+    merged before the result is returned.
+    """
+    text = _mcp_once(name, args)
+    try:
+        first = json.loads(text)
+    except (ValueError, TypeError):
+        return text
+
+    meta = first.get("meta_data") if isinstance(first, dict) else None
+    rows = first.get("data") if isinstance(first, dict) else None
+    if not (isinstance(meta, dict) and isinstance(rows, list)):
+        return text
+
+    total_pages = int(meta.get("totalPages") or 1)
+    if total_pages <= 1:
+        return text
+
+    merged = list(rows)
+    for page in range(2, min(total_pages, MAX_MCP_PAGES) + 1):
+        paged = dict(args or {})
+        paged["filters"] = {**(paged.get("filters") or {}), "page": page}
+        try:
+            more = json.loads(_mcp_once(name, paged))
+        except (ValueError, TypeError):
+            break
+        chunk = more.get("data") if isinstance(more, dict) else None
+        if not chunk:
+            break
+        merged.extend(chunk)
+
+    first["data"] = merged
+    first["meta_data"] = {
+        **meta,
+        "page": "all",
+        "pages_fetched": min(total_pages, MAX_MCP_PAGES),
+        "rows_returned": len(merged),
+    }
     # Full text on purpose - the caller saves it to disk and truncates only the
     # copy shown to the model.
-    return text or json.dumps(payload.get("result", {}))
+    return json.dumps(first)
 
 
 def _parse_answer(text):
