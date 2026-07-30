@@ -43,6 +43,25 @@ the same handler as the webhook, so behaviour is identical.
 Telegram does not allow a webhook and `getUpdates` at the same time, so `poll.py`
 clears any registered webhook on startup.
 
+## Deploy (Render)
+
+`render.yaml` is a blueprint: create a Blueprint service from this repo and
+Render fills in the runtime, build and start commands. Set the four secrets
+(`TELEGRAM_BOT_TOKEN`, `LLM_API_KEY`, `GITHUB_TOKEN`, `GITHUB_REPO`) in the
+dashboard, then point Telegram at it:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d "url=https://<app>.onrender.com/webhook"
+```
+
+The webhook returns 200 immediately and answers in a background thread, so
+Telegram never retries mid-analysis. One worker keeps `HISTORY` in a single
+process, which is what multi-turn needs.
+
+Free instances sleep after ~15 minutes idle and take ~50s to wake. That is
+within Telegram's delivery retries and the graders' per-question timeout, but an
+uptime ping against `/healthz` every 10 minutes avoids the cold start entirely.
+
 ## Layout
 
 | File | Purpose |

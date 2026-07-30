@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: telegram-data-bot
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    # One worker, long timeout: a question is answered in a background thread
+    # and multi-turn history lives in that process's memory.
+    startCommand: gunicorn main:app --workers 1 --threads 8 --timeout 300
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.1"
+      - key: LLM_BASE_URL
+        value: https://aipipe.org/openai/v1
+      - key: LLM_MODEL
+        value: gpt-4.1-mini
+      - key: LOG_BACKEND
+        value: github
+      - key: GITHUB_BRANCH
+        value: main
+      - key: GITHUB_LOG_DIR
+        value: logs
+      # Secrets - set these in the Render dashboard, not in this file.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        sync: false
