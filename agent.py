@@ -19,7 +19,7 @@ from run_logger import RunLogger
 
 MODEL = os.environ.get("LLM_MODEL", "gpt-4.1-mini")
 BASE_URL = os.environ.get("LLM_BASE_URL", "https://aipipe.org/openai/v1")
-MAX_STEPS = 14
+MAX_STEPS = 18  # the MoSPI MCP workflow alone is four calls before any analysis
 PYTHON_TIMEOUT = 30
 PREVIEW_CHARS = 12000
 
@@ -40,6 +40,14 @@ RULES:
 1b. You have a limited number of steps. Spend them on progress, not on retrying
    something that already failed. If you genuinely cannot retrieve the data,
    answer from your own knowledge in the requested shape rather than failing.
+1d. For Indian official statistics (MoSPI / NSO / eSankhyiki - labour, prices,
+   industry, health, gender, education, energy, environment) use the mospi_*
+   tools, NOT fetch_url. mospi.gov.in is JavaScript-rendered and returns no data
+   over plain HTTP, but the MCP server serves the same figures directly. The
+   workflow is: mospi_list_datasets to pick a dataset, then mospi_get_indicators,
+   then mospi_get_metadata for valid filter values, then mospi_get_data.
+   mospi_get_data returns every state when you omit a state filter, so read the
+   whole list out of that one response - never query states one at a time.
 1c. NEVER answer with a placeholder such as "unknown", "not found", "N/A" or
    "data unavailable". The question always has a real answer. If retrieval
    failed, give your single best real-world answer in the requested shape --
@@ -270,6 +278,68 @@ def run_python(code, workdir):
     return out + (f"\n[stderr]\n{err}" if err else "") or "[no output — use print()]"
 
 
+MOSPI_MCP_URL = os.environ.get("MOSPI_MCP_URL", "https://mcp.mospi.gov.in/mcp")
+MCP_PREFIX = "mospi_"
+_MCP_CACHE = {}
+
+
+def _mcp_rpc(method, params=None, timeout=90):
+    """One JSON-RPC call to the MoSPI MCP server. Replies are SSE-framed."""
+    resp = requests.post(
+        MOSPI_MCP_URL,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    for line in resp.text.splitlines():
+        if line.startswith("data: "):
+            return json.loads(line[6:])
+    return json.loads(resp.text)
+
+
+def mospi_tools():
+    """The MCP server's own tools, as OpenAI function definitions.
+
+    Fetched once and cached. If the server is unreachable the agent simply runs
+    without them rather than failing the whole question.
+    """
+    if "tools" not in _MCP_CACHE:
+        try:
+            listed = _mcp_rpc("tools/list", timeout=30)["result"]["tools"]
+            _MCP_CACHE["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": MCP_PREFIX + t["name"],
+                        "description": (t.get("description") or "")[:1000],
+                        "parameters": t.get("inputSchema")
+                        or {"type": "object", "properties": {}},
+                    },
+                }
+                for t in listed
+            ]
+        except Exception:  # noqa: BLE001 - optional capability
+            _MCP_CACHE["tools"] = []
+    return _MCP_CACHE["tools"]
+
+
+def mospi_call(name, args):
+    """Invoke one MCP tool and return its text content."""
+    payload = _mcp_rpc(
+        "tools/call",
+        {"name": name[len(MCP_PREFIX):], "arguments": args or {}},
+    )
+    if "error" in payload:
+        return f"[MCP error] {payload['error']}"
+    content = payload.get("result", {}).get("content", [])
+    text = "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
+    return _truncate(text or json.dumps(payload.get("result", {})))
+
+
 def _parse_answer(text):
     """Coerce the model's final message into a JSON value."""
     cleaned = text.strip()
@@ -306,13 +376,15 @@ def answer_question(history, chat_id):
     logger.log("user_question", content=history[-1]["content"] if history else "")
 
     client = _client()
+    tools = TOOLS + mospi_tools()
+    logger.log("tools_available", tools=[t["function"]["name"] for t in tools])
     answer = None
 
     for step in range(MAX_STEPS):
         logger.log("model_request", iteration=step, message_count=len(messages))
         try:
             resp = client.chat.completions.create(
-                model=MODEL, messages=messages, tools=TOOLS, temperature=0
+                model=MODEL, messages=messages, tools=tools, temperature=0
             )
         except Exception as exc:  # noqa: BLE001
             logger.log("model_error", iteration=step, error=str(exc))
@@ -362,7 +434,9 @@ def answer_question(history, chat_id):
                 args = {}
             logger.log("tool_call", iteration=step, tool=name, arguments=args)
             try:
-                if name == "web_search":
+                if name.startswith(MCP_PREFIX):
+                    result = mospi_call(name, args)
+                elif name == "web_search":
                     result = web_search(args.get("query", ""))
                 elif name == "fetch_url":
                     result = fetch_url(args.get("url", ""), workdir)

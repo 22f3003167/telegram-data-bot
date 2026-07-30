@@ -1,8 +1,8 @@
 # Telegram data-analyst bot
 
 Answers one data-analysis question per Telegram message. An LLM agent drives
-three tools — `web_search`, `fetch_url` and a sandboxed `run_python` — and every
-step of the run is written to a public JSONL log.
+`web_search`, `fetch_url`, a sandboxed `run_python`, and the official **MoSPI MCP
+server** — and every step of the run is written to a public JSONL log.
 
 ## Reply contract
 
@@ -94,10 +94,21 @@ AI Pipe's other two routes are currently unusable: `/openrouter/v1` returns
 `402 Insufficient credits` (AI Pipe's own upstream balance, not the caller's),
 and `/geminiv1beta` rejects every current model with `"pricing unknown"`.
 
-## Known limitations
+## Indian official statistics (MoSPI)
 
-- **JS-rendered sources.** `mospi.gov.in` returns a ~2.6 KB shell with no data;
-  plain HTTP cannot read it. Such questions fall back to model knowledge.
+`mospi.gov.in` is JavaScript-rendered and serves no data over plain HTTP, so
+scraping it does not work. Instead the agent talks to the National Statistics
+Office's **MCP server** at `https://mcp.mospi.gov.in/mcp` (no authentication),
+covering 25 datasets — PLFS, CPI, IIP, ASI, NAS, NFHS, GENDER, UDISE and more.
+
+Its tools are discovered at runtime via `tools/list` and registered as
+`mospi_list_datasets`, `mospi_get_indicators`, `mospi_get_metadata` and
+`mospi_get_data`, so new tools appear automatically. If the server is
+unreachable the agent runs without them rather than failing the question.
+
+Override the endpoint with `MOSPI_MCP_URL`.
+
+## Known limitations
 - **Search throttling.** DuckDuckGo rate-limits bursts. `web_search` retries
   across two endpoints and then says so explicitly, so the model stops retrying
   and works from a landing page or its own knowledge instead.
